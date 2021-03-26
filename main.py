@@ -16,7 +16,7 @@ def get_args():
     parser.add_argument('--num_workers', type=int, default=3)
 
     # Hyper-parameters
-    parser.add_argument('--epochs', type=int, default=40000)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--lr', type=float, default=0.0002)
     parser.add_argument('--beta1', type=float, default=0.5)
     parser.add_argument('--beta2', type=float, default=0.999)
