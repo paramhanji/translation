@@ -1,9 +1,23 @@
-import argparse
+import argparse, wandb
 import torch
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import Callback
+from pytorch_lightning.loggers import WandbLogger
 
 from networks import cycle_gan
 from datasets.data import LitData
+
+class Visualizer(Callback):
+    def __init__(self, src_imgs):
+        self.src_imgs = src_imgs
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        src_imgs = [i.to(device=pl_module.device) for i in self.src_imgs]
+        trans_imgs = pl_module(src_imgs)
+        combined_AtoB = torch.cat((src_imgs[0], trans_imgs[0]), dim=-1)
+        combined_BtoA = torch.cat((src_imgs[1], trans_imgs[1]), dim=-1)
+        trainer.logger.experiment.log({'A->B':[wandb.Image(combined_AtoB)]})
+        trainer.logger.experiment.log({'B->A':[wandb.Image(combined_BtoA)]})
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -35,8 +49,14 @@ if __name__ == '__main__':
     args = get_args()
     model = cycle_gan.TranslationModel(args.lr, (args.beta1, args.beta2))
     data = LitData(args.exp, args.batch, args.num_workers)
+    val_sample = next(iter(data.val_dataloader()))
+    
+    logger = WandbLogger(project='translation')
+    logger.log_hyperparams(args)
 
     if args.mode == 'train':
-        trainer = pl.Trainer(gpus=1, max_epochs=args.epochs, num_sanity_val_steps=1, deterministic=True,
-                             resume_from_checkpoint=args.resume)
+        trainer = pl.Trainer(gpus=1, max_epochs=args.epochs, num_sanity_val_steps=1,
+                             deterministic=True, resume_from_checkpoint=args.resume,
+                             logger=logger,
+                             callbacks=[Visualizer(val_sample)])
         trainer.fit(model, data)

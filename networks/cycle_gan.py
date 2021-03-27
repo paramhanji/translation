@@ -94,9 +94,7 @@ class TranslationModel(pl.LightningModule):
                 param.requires_grad = requires_grad
 
     def training_step(self, batch, batch_idx, optimizer_idx):
-
         A, B = batch
-        loss = {}
 
         if optimizer_idx == 0:
             # Train the generators
@@ -114,7 +112,7 @@ class TranslationModel(pl.LightningModule):
             loss_gen_A = self.gan_loss(gen_A, torch.ones_like(gen_A))
             loss_gen_B = self.gan_loss(gen_B, torch.ones_like(gen_B))
 
-            return loss_cycle_A + loss_cycle_B + loss_gen_A + loss_gen_B
+            return 10*(loss_cycle_A + loss_cycle_B) + 0.5*(loss_gen_A + loss_gen_B)
 
         elif optimizer_idx == 1:
             # Discriminator for domain A
@@ -127,7 +125,7 @@ class TranslationModel(pl.LightningModule):
             fake = self.A_d(A_hat)
             loss_fake = self.gan_loss(fake, torch.zeros_like(fake))
 
-            return loss_real + loss_fake
+            return 0.5*(loss_real + loss_fake)
 
         elif optimizer_idx == 2:
             # Discriminator for domain B
@@ -140,7 +138,39 @@ class TranslationModel(pl.LightningModule):
             fake = self.B_d(B_hat)
             loss_fake = self.gan_loss(fake, torch.zeros_like(fake))
 
-            return loss_real + loss_fake
+            return 0.5*(loss_real + loss_fake)
+
+    def validation_step(self, batch, batch_idx):
+        A, B = batch
+        loss = {}
+
+        B_hat = self.forw_g(A)
+        A_hat = self.back_g(B)
+
+        B_hat_hat = self.forw_g(A_hat)
+        A_hat_hat = self.back_g(B_hat)
+        loss['cycle_A'] = self.rec_loss(A, A_hat_hat)
+        loss['cycle_B'] = self.rec_loss(B, B_hat_hat)
+
+        real_A = self.A_d(A)
+        real_B = self.B_d(B)
+        fake_A = self.A_d(A_hat)
+        fake_B = self.B_d(B_hat)
+        loss['real_A'] = self.gan_loss(real_A, torch.ones_like(real_A))
+        loss['real_B'] = self.gan_loss(real_B, torch.ones_like(real_B))
+        loss['fake_A'] = self.gan_loss(fake_A, torch.zeros_like(fake_A))
+        loss['fake_B'] = self.gan_loss(fake_B, torch.zeros_like(fake_B))
+
+        self.logger.log_metrics(loss)
+        return torch.stack([loss[l] for l in loss]).sum()
+
+    def forward(self, x):
+        A, B = x
+        B_hat = self.forw_g(A)
+        A_hat = self.back_g(B)
+
+        return B_hat, A_hat
+
 
     def configure_optimizers(self):
         g_opt = torch.optim.Adam(list(self.forw_g.parameters()) + list(self.back_g.parameters()),
