@@ -140,6 +140,8 @@ cython_debug/
 # Datasets
 datasets/mnist
 datasets/svhn
+datasets/summer2winter
 
 # logs
 lightning_logs
+wandb
