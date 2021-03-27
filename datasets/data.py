@@ -1,33 +1,59 @@
+import os
+from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
-from torchvision import datasets
-from torchvision import transforms
+from torchvision import datasets, transforms
 import pytorch_lightning as pl
 
-class UnpairedDataset(Dataset):
-	def __init__(self, exp, size, train):
-		self.exp = exp
-		transform = transforms.Compose([transforms.Resize(size),
-										transforms.ToTensor(),
-										transforms.Normalize((0.5), (0.5))])
-		if train:
-			split='train'
-		else:
-			split='test'
-		if exp == 'mnist2svhn':
-			data1 = datasets.MNIST(root='datasets/mnist', train=train,# download=True,
-								   transform=transform)
-			data2 = datasets.SVHN(root='datasets/svhn', split=split,# download=True,
-								  transform=transform)
+IMG_EXTENSIONS = (
+	'.jpg', '.JPG', '.jpeg', '.JPEG',
+	'.png', '.PNG', '.ppm', '.PPM', '.bmp', '.BMP',
+	'.tif', '.TIF', '.tiff', '.TIFF',
+)
 
-		self.datasets = (data1, data2)
+def make_dataset(dir, max_dataset_size=float("inf")):
+	images = []
+	assert os.path.isdir(dir), '%s is not a valid directory' % dir
+
+	for root, _, fnames in sorted(os.walk(dir)):
+		for fname in fnames:
+			if fname.endswith(IMG_EXTENSIONS):
+				path = os.path.join(root, fname)
+				images.append(path)
+	return images[:min(max_dataset_size, len(images))]
+
+
+class UnpairedDataset(Dataset):
+	def __init__(self, exp, size, split):
+		self.exp = exp
+		if exp == 'mnist2svhn':
+			transform = transforms.Compose([transforms.Grayscale(1),
+											transforms.Resize(size, Image.BICUBIC),
+											transforms.ToTensor(),
+											transforms.Normalize(*[[0.5]]*2)])
+			data1 = datasets.MNIST(root='datasets/mnist', train=(split == 'train'),
+								   transform=self.transform)
+			data2 = datasets.SVHN(root='datasets/svhn', split=split,
+								  transform=self.transform)
+			self.datasets = (data1, data2)
+		else:
+			A_paths = sorted(make_dataset(f'datasets/{exp}/{split}A'))
+			B_paths = sorted(make_dataset(f'datasets/{exp}/{split}B'))
+			self.datasets = (A_paths, B_paths)
+			self.transform = transforms.Compose([transforms.Resize(size, Image.BICUBIC),
+												 transforms.ToTensor(),
+												 transforms.Normalize(*[[0.5]*3]*2)])
 
 	def __getitem__(self, i):
 		if self.exp == 'mnist2svhn':
-			# Use only green channel for SVHN
-			return self.datasets[0][i][0], self.datasets[1][i][0][1].unsqueeze(0)
+			# Ignore labels, use only images
+			return self.datasets[0][i][0], self.datasets[1][i][0]
 
-		return self.datasets[0][i], self.datasets[1][i]
+		A_path = self.datasets[0][i]
+		B_path = self.datasets[1][i]
+		A_img = self.transform(Image.open(A_path).convert('RGB'))
+		B_img = self.transform(Image.open(B_path).convert('RGB'))
+		return A_img, B_img
 
 	def __len__(self):
 		return min(len(d) for d in self.datasets)
@@ -35,10 +61,10 @@ class UnpairedDataset(Dataset):
 class LitData(pl.LightningDataModule):
 	def __init__(self, exp, batch, workers):
 		super().__init__()
-		if exp == 'mnist2svhn':
-			size=32
-		self.train = UnpairedDataset(exp, size, True)
-		self.test = UnpairedDataset(exp, size, False)
+		size = {'mnist2svhn': 32,
+				'summer2winter': 256}
+		self.train = UnpairedDataset(exp, size[exp], 'train')
+		self.test = UnpairedDataset(exp, size[exp], 'test')
 		self.batch = batch
 		self.workers = workers
 

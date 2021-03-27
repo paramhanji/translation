@@ -46,13 +46,12 @@ class G(torch.nn.Module):
 
 class D(torch.nn.Module):
     """Discriminator for both domains."""
-    def __init__(self, conv_dim=64, use_labels=False, in_dim=1):
+    def __init__(self, conv_dim=64, in_dim=1):
         super().__init__()
         self.conv1 = conv(in_dim, conv_dim, 4, bn=False)
         self.conv2 = conv(conv_dim, conv_dim*2, 4)
         self.conv3 = conv(conv_dim*2, conv_dim*4, 4)
-        n_out = 11 if use_labels else 1
-        self.fc = conv(conv_dim*4, n_out, 4, 1, 0, False)
+        self.fc = conv(conv_dim*4, 1, 4, 1, 0, False)
         
     def forward(self, x):
         out = F.leaky_relu(self.conv1(x), 0.05)    # (?, 64, 16, 16)
@@ -63,12 +62,16 @@ class D(torch.nn.Module):
 
 import pytorch_lightning as pl
 class TranslationModel(pl.LightningModule):
-    def __init__(self, lr, betas, loss='l1'):
+    def __init__(self, exp, lr, betas, loss='l1'):
         super().__init__()
-        self.forw_g = G()
-        self.back_g = G()
-        self.A_d = D()
-        self.B_d = D()
+        if exp == 'mnist2svhn':
+            num_channels = 1
+        else:
+            num_channels = 3
+        self.forw_g = G(in_out_dim=num_channels)
+        self.back_g = G(in_out_dim=num_channels)
+        self.A_d = D(in_dim=num_channels)
+        self.B_d = D(in_dim=num_channels)
 
         if loss=='l2':
             self.rec_loss = torch.nn.MSELoss()

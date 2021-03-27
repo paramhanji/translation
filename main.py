@@ -22,11 +22,11 @@ class Visualizer(Callback):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str, choices=['train', 'test'])
-    parser.add_argument('--exp', type=str, default='mnist2svhn')
+    parser.add_argument('--exp', type=str, choices=['mnist2svhn', 'summer2winter'],
+                        default='summer2winter')
 
     # Data
-    parser.add_argument('--size', type=int, default=32)
-    parser.add_argument('--batch', type=int, default=64)
+    parser.add_argument('--batch', type=int, default=32)
     parser.add_argument('--num_workers', type=int, default=3)
 
     # Hyper-parameters
@@ -38,7 +38,7 @@ def get_args():
     
     # Misc
     parser.add_argument('--resume', type=str, default=None)
-    parser.add_argument('--log_step', type=int , default=10)
+    parser.add_argument('--log_iter', type=int , default=10)
     parser.add_argument('--sample_step', type=int , default=500)
 
     args = parser.parse_args()
@@ -47,7 +47,7 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
-    model = cycle_gan.TranslationModel(args.lr, (args.beta1, args.beta2))
+    model = cycle_gan.TranslationModel(args.exp, args.lr, (args.beta1, args.beta2))
     data = LitData(args.exp, args.batch, args.num_workers)
     val_sample = next(iter(data.val_dataloader()))
     
@@ -57,6 +57,6 @@ if __name__ == '__main__':
     if args.mode == 'train':
         trainer = pl.Trainer(gpus=1, max_epochs=args.epochs, num_sanity_val_steps=1,
                              deterministic=True, resume_from_checkpoint=args.resume,
-                             logger=logger,
+                             logger=logger, check_val_every_n_epoch=args.log_iter,
                              callbacks=[Visualizer(val_sample)])
         trainer.fit(model, data)
