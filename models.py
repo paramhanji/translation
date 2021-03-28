@@ -1,77 +1,17 @@
-import torch
-import torch.nn.functional as F
+import torch, pytorch_lightning as pl
+from networks.gan import define_G, define_D
 
-def deconv(c_in, c_out, k_size, stride=2, pad=1, bn=True):
-    """Custom deconvolutional layer for simplicity."""
-    layers = []
-    layers.append(torch.nn.ConvTranspose2d(c_in, c_out, k_size, stride, pad, bias=False))
-    if bn:
-        layers.append(torch.nn.BatchNorm2d(c_out))
-    return torch.nn.Sequential(*layers)
-
-def conv(c_in, c_out, k_size, stride=2, pad=1, bn=True):
-    """Custom convolutional layer for simplicity."""
-    layers = []
-    layers.append(torch.nn.Conv2d(c_in, c_out, k_size, stride, pad, bias=False))
-    if bn:
-        layers.append(torch.nn.BatchNorm2d(c_out))
-    return torch.nn.Sequential(*layers)
-
-class G(torch.nn.Module):
-    """Generator for translating domains"""
-    def __init__(self, conv_dim=64, in_out_dim=1):
-        super().__init__()
-        # encoding blocks
-        self.conv1 = conv(in_out_dim, conv_dim, 4)
-        self.conv2 = conv(conv_dim, conv_dim*2, 4)
-        
-        # residual blocks
-        self.conv3 = conv(conv_dim*2, conv_dim*2, 3, 1, 1)
-        self.conv4 = conv(conv_dim*2, conv_dim*2, 3, 1, 1)
-        
-        # decoding blocks
-        self.deconv1 = deconv(conv_dim*2, conv_dim, 4)
-        self.deconv2 = deconv(conv_dim, in_out_dim, 4, bn=False)
-        
-    def forward(self, x):
-        out = F.leaky_relu(self.conv1(x), 0.05)      # (?, 64, 16, 16)
-        out = F.leaky_relu(self.conv2(out), 0.05)    # (?, 128, 8, 8)
-        
-        out = F.leaky_relu(self.conv3(out), 0.05)    # ( " )
-        out = F.leaky_relu(self.conv4(out), 0.05)    # ( " )
-        
-        out = F.leaky_relu(self.deconv1(out), 0.05)  # (?, 64, 16, 16)
-        out = torch.tanh(self.deconv2(out))              # (?, c, 32, 32)
-        return out
-
-class D(torch.nn.Module):
-    """Discriminator for both domains."""
-    def __init__(self, conv_dim=64, in_dim=1):
-        super().__init__()
-        self.conv1 = conv(in_dim, conv_dim, 4, bn=False)
-        self.conv2 = conv(conv_dim, conv_dim*2, 4)
-        self.conv3 = conv(conv_dim*2, conv_dim*4, 4)
-        self.fc = conv(conv_dim*4, 1, 4, 1, 0, False)
-        
-    def forward(self, x):
-        out = F.leaky_relu(self.conv1(x), 0.05)    # (?, 64, 16, 16)
-        out = F.leaky_relu(self.conv2(out), 0.05)  # (?, 128, 8, 8)
-        out = F.leaky_relu(self.conv3(out), 0.05)  # (?, 256, 4, 4)
-        out = self.fc(out).squeeze()
-        return out
-
-import pytorch_lightning as pl
-class TranslationModel(pl.LightningModule):
-    def __init__(self, exp, lr, betas, loss='l1'):
+class CycleGAN(pl.LightningModule):
+    def __init__(self, exp, lr, betas, epoch_decay, loss='l1'):
         super().__init__()
         if exp == 'mnist2svhn':
             num_channels = 1
         else:
             num_channels = 3
-        self.forw_g = G(in_out_dim=num_channels)
-        self.back_g = G(in_out_dim=num_channels)
-        self.A_d = D(in_dim=num_channels)
-        self.B_d = D(in_dim=num_channels)
+        self.forw_g = define_G(num_channels)
+        self.back_g = define_G(num_channels)
+        self.A_d = define_D(num_channels)
+        self.B_d = define_D(num_channels)
 
         if loss=='l2':
             self.rec_loss = torch.nn.MSELoss()
@@ -81,6 +21,7 @@ class TranslationModel(pl.LightningModule):
 
         self.lr = lr
         self.betas = betas
+        self.epoch_decay = epoch_decay
 
     @staticmethod
     def set_requires_grad(nets, requires_grad):
@@ -115,7 +56,7 @@ class TranslationModel(pl.LightningModule):
             loss_gen_A = self.gan_loss(gen_A, torch.ones_like(gen_A))
             loss_gen_B = self.gan_loss(gen_B, torch.ones_like(gen_B))
 
-            return 10*(loss_cycle_A + loss_cycle_B) + 0.5*(loss_gen_A + loss_gen_B)
+            return 10*(loss_cycle_A + loss_cycle_B) + loss_gen_A + loss_gen_B
 
         elif optimizer_idx == 1:
             # Discriminator for domain A
@@ -128,7 +69,7 @@ class TranslationModel(pl.LightningModule):
             fake = self.A_d(A_hat)
             loss_fake = self.gan_loss(fake, torch.zeros_like(fake))
 
-            return 0.5*(loss_real + loss_fake)
+            return loss_real + loss_fake
 
         elif optimizer_idx == 2:
             # Discriminator for domain B
@@ -141,7 +82,7 @@ class TranslationModel(pl.LightningModule):
             fake = self.B_d(B_hat)
             loss_fake = self.gan_loss(fake, torch.zeros_like(fake))
 
-            return 0.5*(loss_real + loss_fake)
+            return loss_real + loss_fake
 
     def validation_step(self, batch, batch_idx):
         A, B = batch
@@ -174,11 +115,19 @@ class TranslationModel(pl.LightningModule):
 
         return B_hat, A_hat
 
+    def lr_lambda(self, epoch):
+        fraction = (epoch - self.epoch_decay) / self.epoch_decay
+        return 1 if epoch < self.epoch_decay else 1 - fraction
 
     def configure_optimizers(self):
         g_opt = torch.optim.Adam(list(self.forw_g.parameters()) + list(self.back_g.parameters()),
                                  self.lr, self.betas)
         d_A_opt = torch.optim.Adam(self.A_d.parameters(), self.lr, self.betas)
         d_B_opt = torch.optim.Adam(self.B_d.parameters(), self.lr, self.betas)
-        
-        return [g_opt, d_A_opt, d_B_opt]
+
+        # define the lr_schedulers
+        g_sch   = torch.optim.lr_scheduler.LambdaLR(g_opt  , lr_lambda = self.lr_lambda)
+        d_A_sch = torch.optim.lr_scheduler.LambdaLR(d_A_opt, lr_lambda = self.lr_lambda)
+        d_B_sch = torch.optim.lr_scheduler.LambdaLR(d_B_opt, lr_lambda = self.lr_lambda)
+
+        return [g_opt, d_A_opt, d_B_opt], [g_sch, d_A_sch, d_B_sch]

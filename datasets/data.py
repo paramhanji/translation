@@ -62,7 +62,7 @@ class LitData(pl.LightningDataModule):
 	def __init__(self, exp, batch, workers):
 		super().__init__()
 		size = {'mnist2svhn': 32,
-				'summer2winter': 256}
+				'summer2winter': 128}
 		self.train = UnpairedDataset(exp, size[exp], 'train')
 		self.test = UnpairedDataset(exp, size[exp], 'test')
 		self.batch = batch
