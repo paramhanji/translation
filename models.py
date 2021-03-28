@@ -1,10 +1,10 @@
 import torch, pytorch_lightning as pl
-from networks.gan import define_G, define_D
+from networks.gan import define_G, define_D, define_F
 
 class CycleGAN(pl.LightningModule):
-    def __init__(self, exp, lr, betas, epoch_decay, loss='l1'):
+    def __init__(self, args, loss='l1'):
         super().__init__()
-        if exp == 'mnist2svhn':
+        if args.exp == 'mnist2svhn':
             num_channels = 1
         else:
             num_channels = 3
@@ -19,9 +19,7 @@ class CycleGAN(pl.LightningModule):
             self.rec_loss = torch.nn.L1Loss()
         self.gan_loss = torch.nn.MSELoss()
 
-        self.lr = lr
-        self.betas = betas
-        self.epoch_decay = epoch_decay
+        self.args = args
 
     @staticmethod
     def set_requires_grad(nets, requires_grad):
@@ -116,18 +114,136 @@ class CycleGAN(pl.LightningModule):
         return B_hat, A_hat
 
     def lr_lambda(self, epoch):
-        fraction = (epoch - self.epoch_decay) / self.epoch_decay
-        return 1 if epoch < self.epoch_decay else 1 - fraction
+        fraction = (epoch - self.args.epoch_decay) / self.args.epoch_decay
+        return 1 if epoch < self.args.epoch_decay else 1 - fraction
 
     def configure_optimizers(self):
         g_opt = torch.optim.Adam(list(self.forw_g.parameters()) + list(self.back_g.parameters()),
-                                 self.lr, self.betas)
-        d_A_opt = torch.optim.Adam(self.A_d.parameters(), self.lr, self.betas)
-        d_B_opt = torch.optim.Adam(self.B_d.parameters(), self.lr, self.betas)
+                                 self.args.lr, self.args.betas)
+        d_A_opt = torch.optim.Adam(self.A_d.parameters(), self.args.lr, self.args.betas)
+        d_B_opt = torch.optim.Adam(self.B_d.parameters(), self.args.lr, self.args.betas)
 
         # define the lr_schedulers
-        g_sch   = torch.optim.lr_scheduler.LambdaLR(g_opt  , lr_lambda = self.lr_lambda)
-        d_A_sch = torch.optim.lr_scheduler.LambdaLR(d_A_opt, lr_lambda = self.lr_lambda)
-        d_B_sch = torch.optim.lr_scheduler.LambdaLR(d_B_opt, lr_lambda = self.lr_lambda)
+        g_sch   = torch.optim.lr_scheduler.LambdaLR(g_opt  , lr_lambda=self.lr_lambda)
+        d_A_sch = torch.optim.lr_scheduler.LambdaLR(d_A_opt, lr_lambda=self.lr_lambda)
+        d_B_sch = torch.optim.lr_scheduler.LambdaLR(d_B_opt, lr_lambda=self.lr_lambda)
 
         return [g_opt, d_A_opt, d_B_opt], [g_sch, d_A_sch, d_B_sch]
+
+
+class CUTGAN(pl.LightningModule):
+    def __init__(self, args, loss='l1', num_patches=256):
+        super().__init__()
+        if args.exp == 'mnist2svhn':
+            num_channels = 1
+        else:
+            num_channels = 3
+        self.f = define_F(num_channels)
+        self.forw_g = define_G(num_channels)
+        self.d = define_D(num_channels)
+
+        if loss=='l2':
+            self.rec_loss = torch.nn.MSELoss()
+        elif loss == 'l1':
+            self.rec_loss = torch.nn.L1Loss()
+        self.gan_loss = torch.nn.MSELoss()
+        self.num_patches = num_patches
+
+        # NCE loss
+        from loss import PatchNCELoss
+        self.nce_layers = [int(i) for i in args.nce_layers.split(',')]
+        self.criterionNCE = [PatchNCELoss(args.batch) for l in self.nce_layers]
+
+        self.args = args
+
+    @staticmethod
+    def set_requires_grad(nets, requires_grad):
+        """
+        Set requies_grad for all the networks to avoid unnecessary computations
+        Parameters:
+            nets (network list)   -- a list of networks
+            requires_grad (bool)  -- whether the networks require gradients or not
+        """
+
+        if not isinstance(nets, list): nets = [nets]
+        for net in nets:
+            for param in net.parameters():
+                param.requires_grad = requires_grad
+
+    def calculate_NCE_loss(self, src, tgt):
+        n_layers = len(self.nce_layers)
+        feat_q = self.forw_g(tgt, self.nce_layers, encode_only=True)
+
+        feat_k = self.forw_g(src, self.nce_layers, encode_only=True)
+        feat_k_pool, sample_ids = self.f(feat_k, self.num_patches, None)
+        feat_q_pool, _ = self.f(feat_q, self.num_patches, sample_ids)
+
+        total_nce_loss = 0.0
+        for f_q, f_k, crit, nce_layer in zip(feat_q_pool, feat_k_pool, self.criterionNCE, self.nce_layers):
+            loss = crit(f_q, f_k)
+            total_nce_loss += loss.mean()
+
+        return total_nce_loss / n_layers
+
+    def training_step(self, batch, batch_idx, optimizer_idx):
+        A, B = batch
+
+        if optimizer_idx == 0:
+            # Train the generators
+            self.set_requires_grad(self.d, False)
+            B_hat = self.forw_g(A)
+
+            gen_B = self.d(B_hat)
+            loss_gen_B = self.gan_loss(gen_B, torch.ones_like(gen_B))
+            loss_nce = self.calculate_NCE_loss(A, B_hat)
+
+            return loss_gen_B + loss_nce
+
+        elif optimizer_idx == 1:
+            # Discriminator for domain A
+            self.set_requires_grad(self.d, True)
+
+            real = self.d(B)
+            loss_real = self.gan_loss(real, torch.ones_like(real))
+
+            B_hat = self.forw_g(A)
+            fake = self.d(B_hat)
+            loss_fake = self.gan_loss(fake, torch.zeros_like(fake))
+
+            return 0.5*(loss_real + loss_fake)
+
+    def validation_step(self, batch, batch_idx):
+        A, B = batch
+        loss = {}
+
+        B_hat = self.forw_g(A)
+        loss['nce'] = self.calculate_NCE_loss(A, B_hat)
+
+        real = self.d(B)
+        fake = self.d(B_hat)
+        loss['real'] = self.gan_loss(real, torch.ones_like(real))
+        loss['fake'] = self.gan_loss(fake, torch.zeros_like(fake))
+
+        self.logger.log_metrics(loss)
+        return torch.stack([loss[l] for l in loss]).sum()
+
+    def forward(self, x):
+        A, B = x
+        B_hat = self.forw_g(A)
+
+        return [B_hat]
+
+    def lr_lambda(self, epoch):
+        fraction = (epoch - self.args.epoch_decay) / self.args.epoch_decay
+        return 1 if epoch < self.args.epoch_decay else 1 - fraction
+
+    def configure_optimizers(self):
+        g_f_opt = torch.optim.Adam(list(self.forw_g.parameters()) + list(self.f.parameters()),
+                                 self.args.lr, self.args.betas)
+        d_opt = torch.optim.Adam(self.d.parameters(), self.args.lr, self.args.betas)
+
+        # define the lr_schedulers
+        g_f_sch   = torch.optim.lr_scheduler.LambdaLR(g_f_opt , lr_lambda=self.lr_lambda)
+        d_sch = torch.optim.lr_scheduler.LambdaLR(d_opt, lr_lambda=self.lr_lambda)
+
+        return [g_f_opt, d_opt], [g_f_sch, d_sch]

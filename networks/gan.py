@@ -1,4 +1,4 @@
-import functools
+import torch, functools
 import torch.nn as nn
 from torch.nn import init
 
@@ -85,9 +85,30 @@ class ResnetGenerator(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, input):
-        """Standard forward"""
-        return self.model(input)
+    def forward(self, input, layers=[], encode_only=False):
+        if -1 in layers:
+            layers.append(len(self.model))
+        if len(layers) > 0:
+            feat = input
+            feats = []
+            for layer_id, layer in enumerate(self.model):
+                # print(layer_id, layer)
+                feat = layer(feat)
+                if layer_id in layers:
+                    # print("%d: adding the output of %s %d" % (layer_id, layer.__class__.__name__, feat.size(1)))
+                    feats.append(feat)
+                else:
+                    # print("%d: skipping %s %d" % (layer_id, layer.__class__.__name__, feat.size(1)))
+                    pass
+                if layer_id == layers[-1] and encode_only:
+                    # print('encoder only return features')
+                    return feats  # return intermediate features alone; stop in the last layers
+
+            return feat, feats  # return both output and intermediate features
+        else:
+            """Standard forward"""
+            fake = self.model(input)
+            return fake
 
 
 class ResnetBlock(nn.Module):
@@ -175,7 +196,6 @@ def define_G(nc, ngf=64, netG='resnet_6blocks', norm='batch', use_dropout=False,
         use_dropout (bool) -- if use dropout layers.
         init_type (str)    -- the name of our initialization method.
         init_gain (float)  -- scaling factor for normal, xavier and orthogonal.
-        gpu_ids (int list) -- which GPUs the network runs on: e.g., 0,1,2
     Returns a generator
     Our current implementation provides two types of generators:
         U-Net: [unet_128] (for 128x128 input images) and [unet_256] (for 256x256 input images)
@@ -259,7 +279,6 @@ def define_D(input_nc, ndf=64, netD='basic', n_layers_D=3, norm='batch', init_ty
         norm (str)         -- the type of normalization layers used in the network.
         init_type (str)    -- the name of the initialization method.
         init_gain (float)  -- scaling factor for normal, xavier and orthogonal.
-        gpu_ids (int list) -- which GPUs the network runs on: e.g., 0,1,2
     Returns a discriminator
     Our current implementation provides three types of discriminators:
         [basic]: 'PatchGAN' classifier described in the original pix2pix paper.
@@ -284,6 +303,84 @@ def define_D(input_nc, ndf=64, netD='basic', n_layers_D=3, norm='batch', init_ty
         net = PixelDiscriminator(input_nc, ndf, norm_layer=norm_layer)
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % netD)
+    init_weights(net, init_type, init_gain)
+    return net
+
+
+class PatchSampleF(nn.Module):
+    def __init__(self, use_mlp=False, init_type='normal', init_gain=0.02, nc=256):
+        # potential issues: currently, we use the same patch_ids for multiple images in the batch
+        super(PatchSampleF, self).__init__()
+        self.l2norm = Normalize(2)
+        self.use_mlp = use_mlp
+        self.nc = nc  # hard-coded
+        self.mlp_init = False
+        self.init_type = init_type
+        self.init_gain = init_gain
+
+    def create_mlp(self, feats):
+        for mlp_id, feat in enumerate(feats):
+            input_nc = feat.shape[1]
+            mlp = nn.Sequential(*[nn.Linear(input_nc, self.nc), nn.ReLU(), nn.Linear(self.nc, self.nc)])
+            setattr(self, 'mlp_%d' % mlp_id, mlp)
+        init_weights(self, self.init_type, self.init_gain)
+        self.mlp_init = True
+
+    def forward(self, feats, num_patches=64, patch_ids=None):
+        return_ids = []
+        return_feats = []
+        if self.use_mlp and not self.mlp_init:
+            self.create_mlp(feats)
+        for feat_id, feat in enumerate(feats):
+            B, H, W = feat.shape[0], feat.shape[2], feat.shape[3]
+            feat_reshape = feat.permute(0, 2, 3, 1).flatten(1, 2)
+            if num_patches > 0:
+                if patch_ids is not None:
+                    patch_id = patch_ids[feat_id]
+                else:
+                    patch_id = torch.randperm(feat_reshape.shape[1], device=feats[0].device)
+                    patch_id = patch_id[:int(min(num_patches, patch_id.shape[0]))]  # .to(patch_ids.device)
+                x_sample = feat_reshape[:, patch_id, :].flatten(0, 1)  # reshape(-1, x.shape[1])
+            else:
+                x_sample = feat_reshape
+                patch_id = []
+            if self.use_mlp:
+                mlp = getattr(self, 'mlp_%d' % feat_id).to(x_sample.device)
+                x_sample = mlp(x_sample)
+            return_ids.append(patch_id)
+            x_sample = self.l2norm(x_sample)
+
+            if num_patches == 0:
+                x_sample = x_sample.permute(0, 2, 1).reshape([B, x_sample.shape[-1], H, W])
+            return_feats.append(x_sample)
+        return return_feats, return_ids
+
+
+class Normalize(nn.Module):
+
+    def __init__(self, power=2):
+        super(Normalize, self).__init__()
+        self.power = power
+
+    def forward(self, x):
+        norm = x.pow(self.power).sum(1, keepdim=True).pow(1. / self.power)
+        out = x.div(norm + 1e-7)
+        return out
+
+
+def define_F(input_nc, netF='mlp_sample', norm='batch', use_dropout=False, init_type='normal', init_gain=0.02):
+    if netF == 'global_pool':
+        net = PoolingF()
+    elif netF == 'reshape':
+        net = ReshapeF()
+    elif netF == 'sample':
+        net = PatchSampleF(use_mlp=False, init_type=init_type, init_gain=init_gain)
+    elif netF == 'mlp_sample':
+        net = PatchSampleF(use_mlp=True, init_type=init_type, init_gain=init_gain)
+    elif netF == 'strided_conv':
+        net = StridedConvF(init_type=init_type, init_gain=init_gain)
+    else:
+        raise NotImplementedError('projection model name [%s] is not recognized' % netF)
     init_weights(net, init_type, init_gain)
     return net
 
