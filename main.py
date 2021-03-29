@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger
 
-from models import CycleGAN, CUTGAN
+from models import CycleGAN, CUTGAN, CycleFlow
 from datasets.data import LitData
 
 class Visualizer(Callback):
@@ -28,7 +28,7 @@ class Visualizer(Callback):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str, choices=['train', 'test'])
-    parser.add_argument('model', type=str, choices=['cyclegan', 'cutgan'])
+    parser.add_argument('model', type=str, choices=['cyclegan', 'cutgan', 'cycleflow'])
     parser.add_argument('--exp', type=str, choices=['mnist2svhn', 'summer2winter'],
                         default='summer2winter')
 
@@ -55,7 +55,7 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
-    models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN}
+    models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN, 'cycleflow': CycleFlow}
     model = (models[args.model])(args)
     data = LitData(args.exp, args.batch, args.num_workers)
     val_sample = next(iter(data.val_dataloader()))

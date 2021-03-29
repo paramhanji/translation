@@ -48,3 +48,22 @@ class PatchNCELoss(nn.Module):
                                                         device=feat_q.device))
 
         return loss
+
+
+class JacobianClampingLoss(nn.Module):
+    """Module for adding Jacobian Clamping loss.
+    See Also:
+        https://arxiv.org/abs/1802.08768v2
+    """
+    def __init__(self, lambda_min=1., lambda_max=20.):
+        super(JacobianClampingLoss, self).__init__()
+        self.lambda_min = lambda_min
+        self.lambda_max = lambda_max
+
+    def forward(self, gz, gz_prime, z, z_prime):
+        q = (gz - gz_prime).norm() / (z - z_prime).norm()
+        l_max = (q.clamp(self.lambda_max, float('inf')) - self.lambda_max) ** 2
+        l_min = (q.clamp(float('-inf'), self.lambda_min) - self.lambda_min) ** 2
+        l_jc = l_max + l_min
+
+        return l_jc
