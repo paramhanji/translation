@@ -141,6 +141,7 @@ cython_debug/
 datasets/mnist
 datasets/svhn
 datasets/summer2winter
+datasets/cifar
 
 # logs
 lightning_logs
