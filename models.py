@@ -1,6 +1,10 @@
 import torch, pytorch_lightning as pl
+
 from networks.gan import define_G, define_D, define_F
 from networks.flow import define_flow
+from networks.freia_survae import base_flow, survae_flow
+
+from survae.utils import iwbo_nats
 
 def set_requires_grad(nets, requires_grad):
     """
@@ -19,14 +23,10 @@ def set_requires_grad(nets, requires_grad):
 class CycleGAN(pl.LightningModule):
     def __init__(self, args, loss='l1'):
         super().__init__()
-        if args.exp == 'mnist2svhn':
-            num_channels = 1
-        else:
-            num_channels = 3
-        self.forw_g = define_G(num_channels)
-        self.back_g = define_G(num_channels)
-        self.A_d = define_D(num_channels)
-        self.B_d = define_D(num_channels)
+        self.forw_g = define_G(args.num_channels)
+        self.back_g = define_G(args.num_channels)
+        self.A_d = define_D(args.num_channels)
+        self.B_d = define_D(args.num_channels)
 
         if loss=='l2':
             self.rec_loss = torch.nn.MSELoss()
@@ -136,13 +136,9 @@ class CycleGAN(pl.LightningModule):
 class CUTGAN(pl.LightningModule):
     def __init__(self, args, loss='l1', num_patches=256):
         super().__init__()
-        if args.exp == 'mnist2svhn':
-            num_channels = 1
-        else:
-            num_channels = 3
-        self.f = define_F(num_channels)
-        self.forw_g = define_G(num_channels)
-        self.d = define_D(num_channels)
+        self.f = define_F(args.num_channels)
+        self.forw_g = define_G(args.num_channels)
+        self.d = define_D(args.num_channels)
 
         if loss=='l2':
             self.rec_loss = torch.nn.MSELoss()
@@ -240,13 +236,9 @@ class CUTGAN(pl.LightningModule):
 class CycleFlow(pl.LightningModule):
     def __init__(self, args, loss='l1'):
         super().__init__()
-        if args.exp == 'mnist2svhn':
-            num_channels = 1
-        else:
-            num_channels = 3
-        self.flow = define_flow(num_channels, mid_channels=32, num_blocks=3)
-        self.A_d = define_D(num_channels)
-        self.B_d = define_D(num_channels)
+        self.flow = define_flow(args.num_channels, num_blocks=6)
+        self.A_d = define_D(args.num_channels)
+        self.B_d = define_D(args.num_channels)
 
         if loss=='l2':
             self.rec_loss = torch.nn.MSELoss()
@@ -338,3 +330,43 @@ class CycleFlow(pl.LightningModule):
         d_B_sch = torch.optim.lr_scheduler.LambdaLR(d_B_opt, lr_lambda=self.lr_lambda)
 
         return [g_opt, d_A_opt, d_B_opt], [g_sch, d_A_sch, d_B_sch]
+
+
+class Noise2AFlow(pl.LightningModule):
+    def __init__(self, args):
+        super().__init__()
+        self.flow = survae_flow(args)
+        self.args = args
+
+    def training_step(self, batch, batch_idx):
+        A, _ = batch
+        nll = -self.flow.log_prob(A).mean()
+        return nll
+
+    def validation_step(self, batch, batch_idx):
+        loss = {}
+        A, _ = batch
+        nll = -self.flow.log_prob(A).mean()
+        loss['nll'] = nll
+        loss['nats'] = iwbo_nats(self.flow, A, k=10)
+
+        self.logger.log_metrics(loss)
+        return loss['nll']
+
+    # Do both forward and reverse passes
+    def forward(self, x):
+        A, _ = x
+        num_samples = A.shape[0]
+        A_hat = self.flow.sample(num_samples)
+
+        return None, A_hat
+
+    def lr_lambda(self, epoch):
+        fraction = (epoch - self.args.epoch_decay) / self.args.epoch_decay
+        return 1 if epoch < self.args.epoch_decay else 1 - fraction
+
+    def configure_optimizers(self):
+        opt = torch.optim.Adam(self.flow.parameters(), self.args.lr, self.args.betas)
+        # sch   = torch.optim.lr_scheduler.LambdaLR(opt  , lr_lambda=self.lr_lambda)
+
+        return [opt] #, [sch]

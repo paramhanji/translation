@@ -23,6 +23,7 @@ def make_dataset(dir, max_dataset_size=float("inf")):
 	return images[:min(max_dataset_size, len(images))]
 
 
+from survae.data.transforms import DynamicBinarize
 class UnpairedDataset(Dataset):
 	def __init__(self, exp, size, split):
 		self.exp = exp
@@ -30,11 +31,11 @@ class UnpairedDataset(Dataset):
 			transform = transforms.Compose([transforms.Grayscale(1),
 											transforms.Resize(size, Image.BICUBIC),
 											transforms.ToTensor(),
-											transforms.Normalize(*[[0.5]]*2)])
+											DynamicBinarize()])
 			data1 = datasets.MNIST(root='datasets/mnist', train=(split == 'train'),
-								   transform=self.transform)
+								   transform=transform)
 			data2 = datasets.SVHN(root='datasets/svhn', split=split,
-								  transform=self.transform)
+								  transform=transform)
 			self.datasets = (data1, data2)
 		else:
 			A_paths = sorted(make_dataset(f'datasets/{exp}/{split}A'))
@@ -59,12 +60,10 @@ class UnpairedDataset(Dataset):
 		return min(len(d) for d in self.datasets)
 
 class LitData(pl.LightningDataModule):
-	def __init__(self, exp, batch, workers):
+	def __init__(self, exp, size, batch, workers):
 		super().__init__()
-		size = {'mnist2svhn': 32,
-				'summer2winter': 128}
-		self.train = UnpairedDataset(exp, size[exp], 'train')
-		self.test = UnpairedDataset(exp, size[exp], 'test')
+		self.train = UnpairedDataset(exp, size, 'train')
+		self.test = UnpairedDataset(exp, size, 'test')
 		self.batch = batch
 		self.workers = workers
 
