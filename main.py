@@ -1,8 +1,10 @@
 import argparse, wandb
-import torch
+import torch, numpy as np
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger
+import torchvision
+import matplotlib.pyplot as plt
 
 from models import *
 from datasets.data import LitData
@@ -80,9 +82,28 @@ if __name__ == '__main__':
             logger.log_hyperparams(args)
         else:
             logger = True
+    elif args.mode == 'test':
+        logger = False
+        assert args.resume is not None
 
+    if args.mode == 'train':
         trainer = pl.Trainer(gpus=args.gpus, max_epochs=args.epochs, num_sanity_val_steps=1,
                              deterministic=True, resume_from_checkpoint=args.resume,
                              logger=logger, check_val_every_n_epoch=args.log_iter,
                              callbacks=[Visualizer(val_sample, args.exp)])
         trainer.fit(model, data)
+
+    elif args.mode == 'test':
+        checkpoint = torch.load(args.resume)
+        model.load_state_dict(checkpoint['state_dict'])
+        test_sample = next(iter(data.test_dataloader()))
+        grid_A_real = torchvision.utils.make_grid(test_sample[0], nrow=8).permute(1, 2, 0)
+        grid_B_real = torchvision.utils.make_grid(test_sample[1], nrow=8).permute(1, 2, 0)
+        nll_A_real, imgs = model(test_sample)
+        nll_A_gen, _ = model((imgs, None))
+        nll_B_real, _ = model((test_sample[1], None))
+        grid_A_gen = torchvision.utils.make_grid(imgs, nrow=8).permute(1, 2, 0)
+        grid = np.concatenate((grid_A_real, grid_A_gen, grid_B_real), axis=1).astype(np.float32)
+        print(f'Real A: {nll_A_real.mean()}, gen A: {nll_A_gen.mean()}, real B: {nll_B_real.mean()}')
+        plt.imshow(grid)
+        plt.show()

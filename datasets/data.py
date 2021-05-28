@@ -30,8 +30,8 @@ class UnpairedDataset(Dataset):
 		if exp == 'mnist2svhn':
 			transform = transforms.Compose([transforms.Grayscale(1),
 											transforms.Resize(size, Image.BICUBIC),
-											transforms.ToTensor(),
-											DynamicBinarize()])
+											transforms.ToTensor(),])
+											# DynamicBinarize()])
 			data1 = datasets.MNIST(root='datasets/mnist', train=(split == 'train'),
 								   transform=transform)
 			data2 = datasets.SVHN(root='datasets/svhn', split=split,

@@ -357,9 +357,10 @@ class Noise2AFlow(pl.LightningModule):
     def forward(self, x):
         A, _ = x
         num_samples = A.shape[0]
+        nll = -self.flow.log_prob(A)
         A_hat = self.flow.sample(num_samples)
 
-        return None, A_hat
+        return nll, A_hat
 
     def lr_lambda(self, epoch):
         fraction = (epoch - self.args.epoch_decay) / self.args.epoch_decay

@@ -146,3 +146,6 @@ datasets/cifar
 # logs
 lightning_logs
 wandb
+
+# surVAE flow
+data_path
