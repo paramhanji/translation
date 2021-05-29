@@ -20,6 +20,5 @@ class SVHN(TrainTestLoader):
         trans_test = [ToTensor(), Quantize(num_bits)]
 
         # Load data
-        sub_root = os.path.join(root, 'SVHN')
-        self.train = UnsupervisedSVHN(sub_root, split='train', transform=Compose(trans_train), download=download)
-        self.test = UnsupervisedSVHN(sub_root, split='test', transform=Compose(trans_test), download=download)
+        self.train = UnsupervisedSVHN(root, split='train', transform=Compose(trans_train), download=download)
+        self.test = UnsupervisedSVHN(root, split='test', transform=Compose(trans_test), download=download)
