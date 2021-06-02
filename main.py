@@ -19,7 +19,8 @@ class Visualizer(Callback):
         trans_imgs = pl_module(src_imgs)
         # combined_AtoB = torch.cat((src_imgs[0], trans_imgs[0]), dim=-1)
         if self.bijective:
-            combined_BtoA = torch.cat((src_imgs[1], trans_imgs[1]), dim=-1)
+            pass
+            # combined_BtoA = torch.cat((src_imgs[1], trans_imgs[1]), dim=-1)
         try:
             # trainer.logger.experiment.log({'A->B':[wandb.Image(combined_AtoB)]})
             # trainer.logger.experiment.log({'A':[wandb.Image(src_imgs[0])]})
@@ -49,7 +50,6 @@ def get_args():
     # Hyper-parameters
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--lr', type=float, default=0.0002)
-    parser.add_argument('--betas', type=float, nargs=2, default=[0.5, 0.999])
     parser.add_argument('--epoch-decay', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--nce-layers', type=str, default='0,4,8,12,16')
@@ -62,9 +62,6 @@ def get_args():
 
     args = parser.parse_args()
     torch.manual_seed(args.seed)
-    if args.exp == 'mnist2svhn':
-        assert args.num_channels == 1, \
-               'Mismatch between experiment and number of channels'
 
     return args
 
@@ -73,7 +70,7 @@ if __name__ == '__main__':
     models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN, 'cycleflow': CycleFlow,
               'noise2Aflow': Noise2AFlow}
     model = (models[args.model])(args)
-    data = LitData(args.exp, args.size, args.batch, args.num_workers)
+    data = LitData(args.exp, args.num_channels, args.size, args.batch, args.num_workers)
     val_sample = next(iter(data.val_dataloader()))
 
     if args.mode == 'train':

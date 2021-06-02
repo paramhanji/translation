@@ -97,11 +97,13 @@ def base_flow(args):
 
 
 from survae.flows import Flow
-from survae.transforms import VAE
-from survae.distributions import StandardNormal, ConditionalNormal, ConditionalBernoulli
-from survae.nn.nets import MLP
+from survae.transforms import VAE, AffineCouplingBijection, ActNormBijection2d, Conv1x1
+from survae.transforms import UniformDequantization, Augment, Squeeze2d, Slice
+from survae.distributions import StandardNormal, ConditionalNormal, ConditionalBernoulli, StandardUniform
+from survae.nn.layers import ElementwiseParams2d
+from survae.nn.nets import MLP, DenseNet
 
-def survae_flow(args):
+def vae(args):
     latent_size = 20
     num_dims = args.size*args.size
     encoder = ConditionalNormal(MLP(num_dims, 2*latent_size,
@@ -116,3 +118,34 @@ def survae_flow(args):
     model = Flow(base_dist=StandardNormal((latent_size,)),
                  transforms=[VAE(encoder=encoder, decoder=decoder)])
     return model
+
+def net(channels):
+    return nn.Sequential(DenseNet(in_channels=channels//2, out_channels=channels,
+                                  num_blocks=1, mid_channels=64, depth=8,
+                                  growth=16, dropout=0.0, gated_conv=True,
+                                  zero_init=True),
+                        ElementwiseParams2d(2))
+
+def flow(args):
+    c = args.num_channels
+    s = args.size
+    model = Flow(base_dist=StandardNormal((c*8, s//4, s//4)), transforms=[
+                 UniformDequantization(num_bits=8),
+                 Augment(StandardUniform((c, s, s)), x_size=c),
+                 AffineCouplingBijection(net(c*2)), ActNormBijection2d(c*2), Conv1x1(c*2),
+                 AffineCouplingBijection(net(c*2)), ActNormBijection2d(c*2), Conv1x1(c*2),
+                 AffineCouplingBijection(net(c*2)), ActNormBijection2d(c*2), Conv1x1(c*2),
+                 AffineCouplingBijection(net(c*2)), ActNormBijection2d(c*2), Conv1x1(c*2),
+                 Squeeze2d(), Slice(StandardNormal((c*4, s//2, s//2)), num_keep=c*4),
+                 AffineCouplingBijection(net(c*4)), ActNormBijection2d(c*4), Conv1x1(c*4),
+                 AffineCouplingBijection(net(c*4)), ActNormBijection2d(c*4), Conv1x1(c*4),
+                 AffineCouplingBijection(net(c*4)), ActNormBijection2d(c*4), Conv1x1(c*4),
+                 AffineCouplingBijection(net(c*4)), ActNormBijection2d(c*4), Conv1x1(c*4),
+                 Squeeze2d(), Slice(StandardNormal((c*8, s//4, s//4)), num_keep=c*8),
+                 AffineCouplingBijection(net(c*8)), ActNormBijection2d(c*8), Conv1x1(c*8),
+                 AffineCouplingBijection(net(c*8)), ActNormBijection2d(c*8), Conv1x1(c*8),
+                 AffineCouplingBijection(net(c*8)), ActNormBijection2d(c*8), Conv1x1(c*8),
+                 AffineCouplingBijection(net(c*8)), ActNormBijection2d(c*8), Conv1x1(c*8),])
+    return model
+
+        # loss = -model.log_prob(x.to(device)).sum() / (math.log(2) * x.numel())

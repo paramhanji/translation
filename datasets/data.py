@@ -23,19 +23,21 @@ def make_dataset(dir, max_dataset_size=float("inf")):
 	return images[:min(max_dataset_size, len(images))]
 
 
-from survae.data.transforms import DynamicBinarize
+from survae.data.transforms import DynamicBinarize, Quantize
 class UnpairedDataset(Dataset):
-	def __init__(self, exp, size, split):
+	def __init__(self, exp, channels, size, split):
 		self.exp = exp
 		if exp == 'mnist2svhn':
-			transform = transforms.Compose([transforms.Grayscale(1),
-											transforms.Resize(size, Image.BICUBIC),
-											transforms.ToTensor(),])
-											# DynamicBinarize()])
+			transform = [transforms.Resize(size, Image.BICUBIC),
+						 transforms.ToTensor(),
+						 Quantize(8)]
+						 # DynamicBinarize()])
 			data1 = datasets.MNIST(root='datasets/mnist', train=(split == 'train'),
-								   transform=transform)
+								   transform=transforms.Compose(transform))
+			if channels == 1:
+				transform = [transforms.Grayscale(1)] + transform
 			data2 = datasets.SVHN(root='datasets/svhn', split=split,
-								  transform=transform)
+								  transform=transforms.Compose(transform))
 			self.datasets = (data1, data2)
 		else:
 			A_paths = sorted(make_dataset(f'datasets/{exp}/{split}A'))
@@ -43,7 +45,8 @@ class UnpairedDataset(Dataset):
 			self.datasets = (A_paths, B_paths)
 			self.transform = transforms.Compose([transforms.Resize(size, Image.BICUBIC),
 												 transforms.ToTensor(),
-												 transforms.Normalize(*[[0.5]*3]*2)])
+												 Quantize(8)])
+												 # transforms.Normalize(*[[0.5]*3]*2)])
 
 	def __getitem__(self, i):
 		if self.exp == 'mnist2svhn':
@@ -60,10 +63,10 @@ class UnpairedDataset(Dataset):
 		return min(len(d) for d in self.datasets)
 
 class LitData(pl.LightningDataModule):
-	def __init__(self, exp, size, batch, workers):
+	def __init__(self, exp, channels, size, batch, workers):
 		super().__init__()
-		self.train = UnpairedDataset(exp, size, 'train')
-		self.test = UnpairedDataset(exp, size, 'test')
+		self.train = UnpairedDataset(exp, channels, size, 'train')
+		self.test = UnpairedDataset(exp, channels, size, 'test')
 		self.batch = batch
 		self.workers = workers
 

@@ -1,8 +1,9 @@
 import torch, pytorch_lightning as pl
+import numpy as np
 
 from networks.gan import define_G, define_D, define_F
 from networks.flow import define_flow
-from networks.freia_survae import base_flow, survae_flow
+from networks.freia_survae import base_flow, vae, flow
 
 from survae.utils import iwbo_nats
 
@@ -335,18 +336,22 @@ class CycleFlow(pl.LightningModule):
 class Noise2AFlow(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
-        self.flow = survae_flow(args)
+        self.flow = flow(args)
         self.args = args
 
     def training_step(self, batch, batch_idx):
-        A, _ = batch
-        nll = -self.flow.log_prob(A).mean()
+        # A, _ = batch
+        # nll = -self.flow.log_prob(A).mean()
+        _, A = batch
+        nll = -self.flow.log_prob(A).sum() / (np.log(2) * A.numel())
         return nll
 
     def validation_step(self, batch, batch_idx):
         loss = {}
-        A, _ = batch
-        nll = -self.flow.log_prob(A).mean()
+        # A, _ = batch
+        # nll = -self.flow.log_prob(A).mean()
+        _, A = batch
+        nll = -self.flow.log_prob(A).sum() / (np.log(2) * A.numel())
         loss['nll'] = nll
         loss['nats'] = iwbo_nats(self.flow, A, k=10)
 
@@ -355,7 +360,8 @@ class Noise2AFlow(pl.LightningModule):
 
     # Do both forward and reverse passes
     def forward(self, x):
-        A, _ = x
+        # A, _ = x
+        _, A = x
         num_samples = A.shape[0]
         nll = -self.flow.log_prob(A)
         A_hat = self.flow.sample(num_samples)
@@ -367,7 +373,7 @@ class Noise2AFlow(pl.LightningModule):
         return 1 if epoch < self.args.epoch_decay else 1 - fraction
 
     def configure_optimizers(self):
-        opt = torch.optim.Adam(self.flow.parameters(), self.args.lr, self.args.betas)
+        opt = torch.optim.Adam(self.flow.parameters(), self.args.lr)
         # sch   = torch.optim.lr_scheduler.LambdaLR(opt  , lr_lambda=self.lr_lambda)
 
         return [opt] #, [sch]
