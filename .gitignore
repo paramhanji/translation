@@ -142,6 +142,7 @@ datasets/mnist
 datasets/svhn
 datasets/summer2winter
 datasets/cifar
+datasets/usps
 
 # logs
 lightning_logs

@@ -337,43 +337,41 @@ class Noise2AFlow(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
         self.flow = flow(args)
+        self.domain = args.train_domain
         self.args = args
 
+    def get_input(self, batch):
+        A, B = batch
+        if self.domain == 'A':
+            return A
+        elif self.domain == 'B':
+            return B
+
     def training_step(self, batch, batch_idx):
-        # A, _ = batch
-        # nll = -self.flow.log_prob(A).mean()
-        _, A = batch
-        nll = -self.flow.log_prob(A).sum() / (np.log(2) * A.numel())
+        inp = self.get_input(batch)
+        nll = -self.flow.log_prob(inp).mean()
         return nll
 
     def validation_step(self, batch, batch_idx):
         loss = {}
-        # A, _ = batch
-        # nll = -self.flow.log_prob(A).mean()
-        _, A = batch
-        nll = -self.flow.log_prob(A).sum() / (np.log(2) * A.numel())
-        loss['nll'] = nll
-        loss['nats'] = iwbo_nats(self.flow, A, k=10)
+        inp = self.get_input(batch)
+        loss['nll'] = -self.flow.log_prob(inp).mean()
+        loss['nats'] = iwbo_nats(self.flow, inp, k=10)
 
         self.logger.log_metrics(loss)
         return loss['nll']
 
     # Do both forward and reverse passes
     def forward(self, x):
-        # A, _ = x
-        _, A = x
-        num_samples = A.shape[0]
-        nll = -self.flow.log_prob(A)
-        A_hat = self.flow.sample(num_samples)
+        real = self.get_input(x)
+        nll = -self.flow.log_prob(real).mean()
 
-        return nll, A_hat
+        num_samples = real.shape[0]
+        gen = self.flow.sample(num_samples)
 
-    def lr_lambda(self, epoch):
-        fraction = (epoch - self.args.epoch_decay) / self.args.epoch_decay
-        return 1 if epoch < self.args.epoch_decay else 1 - fraction
+        return nll, gen
 
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.flow.parameters(), self.args.lr)
-        # sch   = torch.optim.lr_scheduler.LambdaLR(opt  , lr_lambda=self.lr_lambda)
 
-        return [opt] #, [sch]
+        return opt

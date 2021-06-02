@@ -37,15 +37,15 @@ def get_args():
     parser.add_argument('mode', type=str, choices=['train', 'test'])
     parser.add_argument('model', type=str,
                         choices=['cyclegan', 'cutgan', 'cycleflow', 'noise2Aflow'])
-    parser.add_argument('--exp', type=str, choices=['mnist2svhn', 'summer2winter'],
-                        default='summer2winter')
+    parser.add_argument('--exp', type=str, default='summer2winter',
+                        choices=['mnist2usps', 'mnist2svhn', 'summer2winter'])
 
     # Data
     parser.add_argument('--size', type=int, default=64)
     parser.add_argument('--num-channels', type=int, default=3)
     parser.add_argument('--batch', type=int, default=32)
-    parser.add_argument('--num-workers', type=int, default=3)
     parser.add_argument('--gpus', type=int, nargs='+', default=[0])
+    parser.add_argument('--train-domain', default=None, choices=['A', 'B'])
 
     # Hyper-parameters
     parser.add_argument('--epochs', type=int, default=200)
@@ -69,8 +69,10 @@ if __name__ == '__main__':
     args = get_args()
     models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN, 'cycleflow': CycleFlow,
               'noise2Aflow': Noise2AFlow}
+    if args.model.startswith('noise'):
+        assert args.train_domain is not None, 'Choose domain to learn first'
     model = (models[args.model])(args)
-    data = LitData(args.exp, args.num_channels, args.size, args.batch, args.num_workers)
+    data = LitData(args.exp, args.num_channels, args.size, args.batch, args.train_domain)
     val_sample = next(iter(data.val_dataloader()))
 
     if args.mode == 'train':
