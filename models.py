@@ -9,6 +9,9 @@ from torch.optim.lr_scheduler import ExponentialLR
 from survae.optim.schedulers import LinearWarmupScheduler
 from survae.utils import iwbo_nats
 
+models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN, 'cycleflow': CycleFlow,
+          'noise2Aflow': Noise2AFlow}
+
 def set_requires_grad(nets, requires_grad):
     """
     Set requies_grad for all the networks to avoid unnecessary computations

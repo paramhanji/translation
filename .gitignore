@@ -138,11 +138,7 @@ dmypy.json
 cython_debug/
 
 # Datasets
-datasets/mnist
-datasets/svhn
-datasets/summer2winter
-datasets/cifar
-datasets/usps
+datasets
 
 # logs
 lightning_logs

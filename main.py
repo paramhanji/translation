@@ -6,14 +6,13 @@ from pytorch_lightning.loggers import WandbLogger
 import torchvision
 import matplotlib.pyplot as plt
 
-from models import *
-from datasets.data import LitData
+from models import models
+from data import LitData
 
 class Visualizer(Callback):
     def __init__(self, loader, exp):
         self.loader = loader
         self.src_imgs = next(iter(loader))
-        self.bijective = exp != 'cutgan'
         self.toy = exp == 'crescent2cubed'
 
     def on_validation_epoch_end(self, trainer, pl_module):
@@ -31,10 +30,9 @@ class Visualizer(Callback):
             trans_imgs = pl_module(src_imgs)
             wandb_img = {'A_hat': [wandb.Image(trans_imgs[1].float())]}
 
-        try:
-            trainer.logger.experiment.log(wandb_img)
-        except AttributeError:
-            pass
+        logger = type(trainer.logger).__name__
+        if logger == 'WandbLogger':
+            logger.experiment.log(wandb_img)
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -72,24 +70,16 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
-    models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN, 'cycleflow': CycleFlow,
-              'noise2Aflow': Noise2AFlow}
     if args.model.startswith('noise'):
         assert args.train_domain is not None, 'Choose domain to learn first'
     model = (models[args.model])(args)
     data = LitData(args.exp, args.num_channels, args.size, args.batch, args.train_domain)
 
     if args.mode == 'train':
+        logger = True
         if args.wandb:
             logger = WandbLogger(project='translation', name=f'{args.model}_{args.exp}')
             logger.log_hyperparams(args)
-        else:
-            logger = True
-    elif args.mode == 'test':
-        logger = False
-        assert args.resume is not None
-
-    if args.mode == 'train':
         trainer = pl.Trainer(gpus=args.gpus, max_epochs=args.epochs, num_sanity_val_steps=1,
                              deterministic=True, resume_from_checkpoint=args.resume,
                              logger=logger, check_val_every_n_epoch=args.log_iter,
@@ -97,6 +87,7 @@ if __name__ == '__main__':
         trainer.fit(model, data)
 
     elif args.mode == 'test':
+        assert args.resume is not None
         checkpoint = torch.load(args.resume)
         model.load_state_dict(checkpoint['state_dict'])
         test_sample = next(iter(data.test_dataloader()))
