@@ -1,5 +1,6 @@
 import torch, pytorch_lightning as pl
 import numpy as np
+import matplotlib.pyplot as plt
 
 from networks.gan import define_G, define_D, define_F
 from networks.flow import define_flow
@@ -8,9 +9,7 @@ from networks.freia_survae import base_flow, vae, flow, toy_flow
 from torch.optim.lr_scheduler import ExponentialLR
 from survae.optim.schedulers import LinearWarmupScheduler
 from survae.utils import iwbo_nats
-
-models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN, 'cycleflow': CycleFlow,
-          'noise2Aflow': Noise2AFlow}
+from survae.distributions import StandardNormal, ConditionalNormal, ConditionalBernoulli, StandardUniform
 
 def set_requires_grad(nets, requires_grad):
     """
@@ -342,7 +341,7 @@ class Noise2AFlow(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
         # self.flow = flow(args)
-        self.flow = toy_flow(args)
+        self.flow = toy_flow(StandardNormal((2,)))
         self.domain = args.train_domain
         self.args = args
 
@@ -377,8 +376,70 @@ class Noise2AFlow(pl.LightningModule):
 
         return nll, gen
 
+    def plot(self, loader):
+        pts = torch.FloatTensor()
+        for A, B in loader:
+            A, B = A.to(self.device), B.to(self.device)
+            _, out = self.forward((A, B))
+            A_hat, B_hat = self.forward((A, B))
+            pts = torch.cat((pts, out))
+
+        fig, ax = plt.subplots()
+        ax.scatter(pts[:,0], pts[:,1])
+        return fig
+
     def configure_optimizers(self):
         # opt = torch.optim.Adamax(self.flow.parameters(), self.args.lr)
         opt = torch.optim.Adam(self.flow.parameters(), self.args.lr)
 
         return opt
+
+
+class A2BFlow(pl.LightningModule):
+    def __init__(self, args):
+        super().__init__()
+        self.flow = toy_flow(args.pretrained_flow)
+        self.args = args
+
+    def training_step(self, batch, batch_idx):
+        A, B = batch
+        nll = -self.flow.log_prob(B).mean()
+        return nll
+
+    def validation_step(self, batch, batch_idx):
+        loss = {}
+        loss['nll'] = self.training_step(batch, batch_idx)
+        if self.logger:
+            self.logger.log_metrics(loss)
+        return loss['nll']
+
+    # Do both forward and reverse passes
+    def forward(self, x):
+        A, B = x
+        B_hat, nll_B = self.flow.forward(A)
+        A_hat, nll_A = self.flow.inverse(B)
+        nll = nll_A + nll_B
+
+        return A_hat, B_hat
+
+    def plot(self, loader):
+        pts = torch.FloatTensor()
+        for A, B in loader:
+            A, B = A.to(self.device), B.to(self.device)
+            A_hat, B_hat = self.forward((A, B))
+            pts = torch.cat((pts, torch.stack((A, B, A_hat, B_hat))), dim=1)
+
+        fig, axes = plt.subplots(2, 2, sharex='col', sharey='col')
+        for t, ax in zip(pts, axes.ravel()):
+            ax.scatter(t[:,0], t[:,1])
+        return fig
+
+    def configure_optimizers(self):
+        # opt = torch.optim.Adamax(self.flow.parameters(), self.args.lr)
+        opt = torch.optim.Adam(self.flow.parameters(), self.args.lr)
+
+        return opt
+
+
+models = {'cyclegan': CycleGAN, 'cutgan': CUTGAN, 'cycleflow': CycleFlow,
+          'noise2Aflow': Noise2AFlow, 'A2Bflow': A2BFlow}

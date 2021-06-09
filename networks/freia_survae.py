@@ -149,7 +149,7 @@ def flow(args):
                  AffineCouplingBijection(net(c*8)), ActNormBijection2d(c*8), Conv1x1(c*8),])
     return model
 
-def toy_flow(args):
+def toy_flow(base_dist):
     D = 2 # Number of data dimensions
     P = 2 # Number of elementwise parameters
 
@@ -163,7 +163,6 @@ def toy_flow(args):
         transforms.append(Reverse(D))
     transforms.pop()
 
-
-    model = Flow(base_dist=StandardNormal((2,)),
+    model = Flow(base_dist=base_dist,
                  transforms=transforms)
     return model

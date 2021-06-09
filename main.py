@@ -1,4 +1,4 @@
-import argparse, wandb
+import argparse, wandb, os
 import torch, numpy as np
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
@@ -6,42 +6,38 @@ from pytorch_lightning.loggers import WandbLogger
 import torchvision
 import matplotlib.pyplot as plt
 
-from models import models
+from models import models, Noise2AFlow
 from data import LitData
 
 class Visualizer(Callback):
     def __init__(self, loader, exp):
         self.loader = loader
         self.src_imgs = next(iter(loader))
-        self.toy = exp == 'crescent2cubed'
+        self.exp = exp
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        if self.toy:
-            pts = torch.FloatTensor()
-            for batch in self.loader:
-                batch = [p.to(device=pl_module.device) for p in batch]
-                _, out = pl_module(batch)
-                pts = torch.cat((pts, out.cpu()))
-            fig, ax = plt.subplots()
-            ax.scatter(pts[:,0], pts[:,1])
-            wandb_img = {'A_hat': [wandb.Image(fig)]}
+        if self.exp == 'crescent2cubed':
+            fig = pl_module.plot(self.loader)
+            wandb_imgs = {'plot': [wandb.Image(fig)]}
+            plt.close(fig)
         else:
             src_imgs = [i.to(device=pl_module.device) for i in self.src_imgs]
             trans_imgs = pl_module(src_imgs)
-            wandb_img = {'A_hat': [wandb.Image(trans_imgs[1].float())]}
+            wandb_imgs = {'A_hat': [wandb.Image(trans_imgs[1].float())]}
 
-        logger = type(trainer.logger).__name__
-        if logger == 'WandbLogger':
-            logger.experiment.log(wandb_img)
+        if type(trainer.logger).__name__ == 'WandbLogger':
+            trainer.logger.experiment.log(wandb_imgs)
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str, choices=['train', 'test'])
     parser.add_argument('model', type=str,
-                        choices=['cyclegan', 'cutgan', 'cycleflow', 'noise2Aflow'])
+                        choices=['cyclegan', 'cutgan', 'cycleflow', 'noise2Aflow',
+                                 'A2Bflow'])
     parser.add_argument('--exp', type=str, default='summer2winter',
                         choices=['mnist2usps', 'mnist2svhn', 'cifar',
                                  'crescent2cubed', 'summer2winter'])
+    parser.add_argument('--pretrained-flow', type=str)
 
     # Data
     parser.add_argument('--size', type=int, default=64)
@@ -70,13 +66,23 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
-    if args.model.startswith('noise'):
+    if args.model == 'noise2Aflow':
         assert args.train_domain is not None, 'Choose domain to learn first'
+    elif args.model == 'A2Bflow':
+        assert os.path.exists(args.pretrained_flow)
+        assert args.train_domain is None
+        checkpoint = torch.load(args.pretrained_flow)
+        flow = Noise2AFlow(args)
+        flow.load_state_dict(checkpoint['state_dict'])
+        flow.eval()
+        for p in flow.parameters():
+            p.requires_grad = False
+        args.pretrained_flow = flow.flow
     model = (models[args.model])(args)
     data = LitData(args.exp, args.num_channels, args.size, args.batch, args.train_domain)
 
     if args.mode == 'train':
-        logger = True
+        logger = False
         if args.wandb:
             logger = WandbLogger(project='translation', name=f'{args.model}_{args.exp}')
             logger.log_hyperparams(args)
@@ -90,14 +96,24 @@ if __name__ == '__main__':
         assert args.resume is not None
         checkpoint = torch.load(args.resume)
         model.load_state_dict(checkpoint['state_dict'])
-        test_sample = next(iter(data.test_dataloader()))
-        grid_A_real = torchvision.utils.make_grid(test_sample[0], nrow=8).permute(1, 2, 0)
-        grid_B_real = torchvision.utils.make_grid(test_sample[1], nrow=8).permute(1, 2, 0)
-        nll_A_real, imgs = model(test_sample)
-        nll_A_gen, _ = model((imgs, None))
-        nll_B_real, _ = model((test_sample[1], None))
-        grid_A_gen = torchvision.utils.make_grid(imgs, nrow=8).permute(1, 2, 0)
-        grid = np.concatenate((grid_A_real, grid_A_gen, grid_B_real), axis=1).astype(np.float32)
-        print(f'Real A: {nll_A_real.mean()}, gen A: {nll_A_gen.mean()}, real B: {nll_B_real.mean()}')
-        plt.imshow(grid)
-        plt.show()
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
+
+        if args.exp == 'crescent2cubed':
+            fig = model.plot(data.test_dataloader())
+            plt.show()
+            plt.close(fig)
+        else:
+            test_sample = next(iter(data.test_dataloader()))
+            grid_A_real = torchvision.utils.make_grid(test_sample[0], nrow=8).permute(1, 2, 0)
+            grid_B_real = torchvision.utils.make_grid(test_sample[1], nrow=8).permute(1, 2, 0)
+            nll_A_real, imgs = model(test_sample)
+            nll_A_gen, _ = model((imgs, None))
+            nll_B_real, _ = model((test_sample[1], None))
+            grid_A_gen = torchvision.utils.make_grid(imgs, nrow=8).permute(1, 2, 0)
+            grid = np.concatenate((grid_A_real, grid_A_gen, grid_B_real), axis=1).astype(np.float32)
+            print(f'Real A: {nll_A_real.mean()}, gen A: {nll_A_gen.mean()}, real B: {nll_B_real.mean()}')
+            plt.imshow(grid)
+            plt.show()
+            plt.close()

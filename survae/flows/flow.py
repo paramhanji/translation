@@ -15,7 +15,7 @@ class Flow(Distribution):
 
     def __init__(self, base_dist, transforms):
         super(Flow, self).__init__()
-        assert isinstance(base_dist, Distribution)
+        assert isinstance(base_dist, Distribution) or isinstance(base_dist, Flow)
         if isinstance(transforms, Transform): transforms = [transforms]
         assert isinstance(transforms, Iterable)
         assert all(isinstance(transform, Transform) for transform in transforms)
@@ -39,3 +39,21 @@ class Flow(Distribution):
 
     def sample_with_log_prob(self, num_samples):
         raise RuntimeError("Flow does not support sample_with_log_prob, see InverseFlow instead.")
+
+    # A->B, similar to sample
+    def forward(self, x):
+        for transform in reversed(self.transforms):
+            x = transform.inverse(x)
+        log_prob = self.base_dist.log_prob(x)
+        nll = -log_prob.mean()
+        return x, nll
+
+    # B->A, similar to log_prob
+    def inverse(self, x):
+        log_prob = torch.zeros(x.shape[0], device=x.device)
+        for transform in self.transforms:
+            x, ldj = transform(x)
+            log_prob += ldj
+        log_prob += self.base_dist.log_prob(x)
+        nll = -log_prob.mean()
+        return x, nll
