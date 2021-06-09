@@ -10,25 +10,29 @@ from models import *
 from datasets.data import LitData
 
 class Visualizer(Callback):
-    def __init__(self, src_imgs, exp):
-        self.src_imgs = src_imgs
+    def __init__(self, loader, exp):
+        self.loader = loader
+        self.src_imgs = next(iter(loader))
         self.bijective = exp != 'cutgan'
+        self.toy = exp == 'crescent2cubed'
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        src_imgs = [i.to(device=pl_module.device) for i in self.src_imgs]
-        trans_imgs = pl_module(src_imgs)
-        # combined_AtoB = torch.cat((src_imgs[0], trans_imgs[0]), dim=-1)
-        if self.bijective:
-            pass
-            # combined_BtoA = torch.cat((src_imgs[1], trans_imgs[1]), dim=-1)
+        if self.toy:
+            pts = torch.FloatTensor()
+            for batch in self.loader:
+                batch = [p.to(device=pl_module.device) for p in batch]
+                _, out = pl_module(batch)
+                pts = torch.cat((pts, out.cpu()))
+            fig, ax = plt.subplots()
+            ax.scatter(pts[:,0], pts[:,1])
+            wandb_img = {'A_hat': [wandb.Image(fig)]}
+        else:
+            src_imgs = [i.to(device=pl_module.device) for i in self.src_imgs]
+            trans_imgs = pl_module(src_imgs)
+            wandb_img = {'A_hat': [wandb.Image(trans_imgs[1].float())]}
+
         try:
-            # trainer.logger.experiment.log({'A->B':[wandb.Image(combined_AtoB)]})
-            # trainer.logger.experiment.log({'A':[wandb.Image(src_imgs[0])]})
-            # trainer.logger.experiment.log({'Noise_hat':[wandb.Image(trans_imgs[0])]})
-            if self.bijective:
-                # trainer.logger.experiment.log({'B->A':[wandb.Image(combined_BtoA)]})
-                # trainer.logger.experiment.log({'Noise':[wandb.Image(src_imgs[1])]})
-                trainer.logger.experiment.log({'A_hat':[wandb.Image(trans_imgs[1].float())]})
+            trainer.logger.experiment.log(wandb_img)
         except AttributeError:
             pass
 
@@ -38,7 +42,8 @@ def get_args():
     parser.add_argument('model', type=str,
                         choices=['cyclegan', 'cutgan', 'cycleflow', 'noise2Aflow'])
     parser.add_argument('--exp', type=str, default='summer2winter',
-                        choices=['mnist2usps', 'mnist2svhn', 'summer2winter'])
+                        choices=['mnist2usps', 'mnist2svhn', 'cifar',
+                                 'crescent2cubed', 'summer2winter'])
 
     # Data
     parser.add_argument('--size', type=int, default=64)
@@ -49,7 +54,7 @@ def get_args():
 
     # Hyper-parameters
     parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--lr', type=float, default=0.0002)
+    parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--epoch-decay', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--nce-layers', type=str, default='0,4,8,12,16')
@@ -73,7 +78,6 @@ if __name__ == '__main__':
         assert args.train_domain is not None, 'Choose domain to learn first'
     model = (models[args.model])(args)
     data = LitData(args.exp, args.num_channels, args.size, args.batch, args.train_domain)
-    val_sample = next(iter(data.val_dataloader()))
 
     if args.mode == 'train':
         if args.wandb:
@@ -89,7 +93,7 @@ if __name__ == '__main__':
         trainer = pl.Trainer(gpus=args.gpus, max_epochs=args.epochs, num_sanity_val_steps=1,
                              deterministic=True, resume_from_checkpoint=args.resume,
                              logger=logger, check_val_every_n_epoch=args.log_iter,
-                             callbacks=[Visualizer(val_sample, args.exp)])
+                             callbacks=[Visualizer(data.val_dataloader(), args.exp)])
         trainer.fit(model, data)
 
     elif args.mode == 'test':

@@ -99,8 +99,9 @@ def base_flow(args):
 from survae.flows import Flow
 from survae.transforms import VAE, AffineCouplingBijection, ActNormBijection2d, Conv1x1
 from survae.transforms import UniformDequantization, Augment, Squeeze2d, Slice
+from survae.transforms import AdditiveCouplingBijection, ActNormBijection, Reverse
 from survae.distributions import StandardNormal, ConditionalNormal, ConditionalBernoulli, StandardUniform
-from survae.nn.layers import ElementwiseParams2d
+from survae.nn.layers import ElementwiseParams2d, ElementwiseParams, scale_fn
 from survae.nn.nets import MLP, DenseNet
 
 def vae(args):
@@ -148,4 +149,21 @@ def flow(args):
                  AffineCouplingBijection(net(c*8)), ActNormBijection2d(c*8), Conv1x1(c*8),])
     return model
 
-        # loss = -model.log_prob(x.to(device)).sum() / (math.log(2) * x.numel())
+def toy_flow(args):
+    D = 2 # Number of data dimensions
+    P = 2 # Number of elementwise parameters
+
+    transforms = []
+    for _ in range(4):
+        net = nn.Sequential(MLP(1, P,
+                                hidden_units=[50],
+                                activation='relu'),
+                            ElementwiseParams(P))
+        transforms.append(AffineCouplingBijection(net, scale_fn=scale_fn('exp')))
+        transforms.append(Reverse(D))
+    transforms.pop()
+
+
+    model = Flow(base_dist=StandardNormal((2,)),
+                 transforms=transforms)
+    return model

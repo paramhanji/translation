@@ -3,8 +3,10 @@ import numpy as np
 
 from networks.gan import define_G, define_D, define_F
 from networks.flow import define_flow
-from networks.freia_survae import base_flow, vae, flow
+from networks.freia_survae import base_flow, vae, flow, toy_flow
 
+from torch.optim.lr_scheduler import ExponentialLR
+from survae.optim.schedulers import LinearWarmupScheduler
 from survae.utils import iwbo_nats
 
 def set_requires_grad(nets, requires_grad):
@@ -336,7 +338,8 @@ class CycleFlow(pl.LightningModule):
 class Noise2AFlow(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
-        self.flow = flow(args)
+        # self.flow = flow(args)
+        self.flow = toy_flow(args)
         self.domain = args.train_domain
         self.args = args
 
@@ -372,6 +375,7 @@ class Noise2AFlow(pl.LightningModule):
         return nll, gen
 
     def configure_optimizers(self):
+        # opt = torch.optim.Adamax(self.flow.parameters(), self.args.lr)
         opt = torch.optim.Adam(self.flow.parameters(), self.args.lr)
 
         return opt
