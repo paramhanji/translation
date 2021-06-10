@@ -427,9 +427,16 @@ class A2BFlow(pl.LightningModule):
         for A, B in loader:
             A, B = A.to(self.device), B.to(self.device)
             A_hat, B_hat = self.forward((A, B))
-            pts = torch.cat((pts, torch.stack((A, B, A_hat, B_hat))), dim=1)
+            pts = torch.cat((pts, torch.stack((A, B, A_hat, B_hat)).cpu()), dim=1)
 
-        fig, axes = plt.subplots(2, 2, sharex='col', sharey='col')
+        fig, axes = plt.subplots(2, 2, sharex='col', sharey=True)
+        axes[0][0].set_ylim([-5, 5])
+        axes[0][0].set_xlim([-3, 7])
+        axes[0][1].set_xlim([-15, 10])
+        axes[0][0].set_ylabel('Real')
+        axes[1][0].set_ylabel('Generated')
+        axes[1][0].set_xlabel('Domain A')
+        axes[1][1].set_xlabel('Domain B')
         for t, ax in zip(pts, axes.ravel()):
             ax.scatter(t[:,0], t[:,1])
         return fig
